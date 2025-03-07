@@ -1,0 +1,309 @@
+blueprint:
+  name: Tesla Solar Optimizer (MQTT)
+  description: >
+    ### Overview
+
+    The purpose of this automation is to optimize the charging process of a Tesla vehicle according to the chosen charge plan. By adjusting the charge limit, it helps maximize solar power consumption and efficiency while meeting the user's charging requirements.
+
+    ### Requirements
+
+    1. [solar_optimizer](https://github.com/jmcollin78/solar_optimizer) integration.
+    2. [tesla_ble_mqtt_docker](https://github.com/tesla-local-control/tesla_ble_mqtt_docker) integration.
+
+    ### Workflow
+
+    1. **Trigger**: The automation is triggered in the morning and evening, at times specified by the user.
+    2. **Action**:
+       - The automation retrieves the selected charge plan.
+       - Based on the charge plan, it calculates and sets the appropriate charge limit for the Tesla vehicle.
+    3. **Notification**:
+       - Users are notified of any changes in charge levels via their preferred device.
+
+    ### Benefits
+
+    - Enables the optimization of excess solar power during the day by adjusting the charge limit according to the chosen charge plan.
+    - Maintains a minimum charge level so the battery does not stay depleted, rendering the car useless.
+    - Provides users notifications to keep them informed about charge level changes.
+
+  domain: automation
+  input:
+    vehicle_mqtt_topic:
+      name: Vehicle MQTT Topic
+      description: The MQTT topic for the Tesla vehicle.
+      selector:
+        text:
+    charge_plan:
+      name: Charge plan
+      description: >
+        Which <code>input_select</code> holds the vehicle's charge plan?
+        <details>
+          <summary><code>Details</code></summary>
+          Choose the <code>input_select</code> that specifies the preferred charge plan for the car. Below is the required YAML code for the input select:
+          ### Input Select Configuration
+          ```yaml
+          input_select:
+            tesla_charge_plan:
+              options:
+                - Solaire
+                - Heures creuses
+                - Immédiat
+          ```
+        </details>
+      selector:
+        entity:
+          filter:
+            - domain: input_select
+    solar_optimizer_switch:
+      name: Solar optimizer switch
+      description: >
+        What is the maximum level of charge of maintain?
+        <details>
+          <summary><code>Details</code></summary>
+          You need [solar_optimizer](https://github.com/jmcollin78/solar_optimizer) for this selector to work.
+          Select the switch <code>switch.enable_solar_optimizer_<tesla></code> declared in your configuration, for the car you selected.
+          <strong>Do not select the switch that controls the solar charge: <code>switch.solar_optimizer_<tesla></code> (without <em>enable</em> in its name).</strong>
+        </details>
+      selector:
+        entity:
+          filter:
+            - domain: switch
+              integration: solar_optimizer
+    offpeak_charge_limit:
+      name: Offpeak charge limit
+      default: 75
+      description: >
+        What is the level of charge to reach on offpeak plan?
+        <details>
+          <summary><code>Details</code></summary>
+          The vehicle will charge up to this level during offpeak hours. If you have a car with LFP batteries, leave it to 100%.
+          <strong>You have to schedule the charge with the Tesla app.</strong>
+          ### Recommended battery charge limit
+          - NCA or NMC: 80 to 90%
+          - LFP: 100%
+        </details>
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    minimum_charge_limit:
+      name: Minimum solar charge limit
+      default: 50
+      description: >
+        What is the minimum level of charge of maintain?
+        <details>
+          <summary><code>Details</code></summary>
+          The vehicle will maintain this charge level, even when using solar optimization.
+          If the selected charge plan is solar and the battery level falls below this level, the vehicle will recharge during nighttime.
+        </details>
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    maximum_charge_limit:
+      name: Maximum solar charge limit
+      default: 100
+      description: >
+        What is the maximum charge level to attain?
+        <details>
+          <summary><code>Details</code></summary>
+          Charging will stop when this limit is reached while on solar plan.
+          ### Recommended battery charge limit
+          - NCA or NMC: 80 to 90%
+          - LFP: 100%
+        </details>
+      selector:
+        number:
+          min: 50
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    trigger_time_morning:
+      name: Trigger time in the morning
+      default: '05:00:00'
+      description: Time in the morning to trigger actions.
+      selector:
+        time:
+    trigger_time_evening:
+      name: Trigger time in the evening
+      default: '22:00:00'
+      description: Time in the evening to trigger actions.
+      selector:
+        time:
+    wake_up_decoy:
+      name: Wake up car via event
+      description: >
+        Publish an event to wake up the car.
+        <details>
+          <summary><code>Details</code></summary>
+          This action is a workaround for some errors related to the current state of the Tesla integration. Sending a wake-up command via the button may sometimes generate an error, but the car usually wakes up fine after a few seconds.
+          To address this, an event `WAKE_UP_TESLA_WITH_BUTTON` is published, which triggers an automation. While this automation may sometimes fail, it ultimately ensures the car wakes up.
+          ### Automation code
+          To make use of this option, you must create the following automation.
+          ```yaml
+          alias: Wake up car via event
+          description: ""
+          trigger:
+            - platform: event
+              event_type: WAKE_UP_TESLA_WITH_BUTTON
+          condition: []
+          action:
+            - service: button.press
+              continue_on_error: true
+              target:
+                entity_id: "{{ trigger.event.data.wake_up_button }}"
+              enabled: true
+          mode: parallel
+          max: 2
+          ```
+        </details>
+      selector:
+        boolean: {}
+      default: true
+    send_notification:
+      name: Send notification
+      description: >
+        Sends a notification to a device if enabled.
+        <details>
+          <summary><code>Details</code></summary>
+          This will notify a user when the automation is triggered, with a summary of the current plan and charge limit.
+        </details>
+      selector:
+        boolean: {}
+      default: true
+    notify_device:
+      name: Device to notify
+      description: The device to receive notifications through the Home Assistant app.
+      selector:
+        device:
+          integration: mobile_app
+      default: ''
+mode: single
+max_exceeded: silent
+variables:
+  send_notification: !input 'send_notification'
+  notify_device: !input 'notify_device'
+  vehicle_mqtt_topic: !input 'vehicle_mqtt_topic'
+  charge_plan: !input 'charge_plan'
+  solar_optimizer_switch: !input 'solar_optimizer_switch'
+  offpeak_charge_limit: !input 'offpeak_charge_limit'
+  minimum_charge_limit: !input 'minimum_charge_limit'
+  maximum_charge_limit: !input 'maximum_charge_limit'
+  trigger_time_morning: !input 'trigger_time_morning'
+  trigger_time_evening: !input 'trigger_time_evening'
+trigger:
+- platform: time
+  at: !input 'trigger_time_morning'
+  id: morning
+- platform: time
+  at: !input 'trigger_time_evening'
+  id: evening
+action:
+- variables:
+    var_charge_plan: >-
+      {{ states(charge_plan) }}
+    var_batery_level: >-
+      {{ maximum_charge_limit if trigger.id == 'morning' and var_charge_plan == 'Solaire' else
+         offpeak_charge_limit if trigger.id == 'morning' and var_charge_plan == 'Heures creuses' else
+         minimum_charge_limit if trigger.id == 'evening' and var_charge_plan == 'Solaire' else
+         offpeak_charge_limit }}
+- event: WAKE_UP_TESLA_WITH_BUTTON
+  event_data:
+    wake_up_button: >-
+      {{ vehicle_mqtt_topic }}/wake_up
+- wait_template: >-
+    {{ states(vehicle_mqtt_topic ~ '/online') == 'on' }}
+  continue_on_timeout: false
+  timeout: "180"
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/polling_interval"
+    payload: >-
+      {{ 660 if trigger.id == 'morning' and var_charge_plan == 'Solaire' else -1 }}
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/data_update"
+    payload: "PRESS"
+- service: >-
+    {{ 'mqtt.publish' }}
+  data:
+    topic: "{{ solar_optimizer_switch }}/command"
+    payload: >-
+      {{ 'ON' if trigger.id == 'morning' and var_charge_plan == 'Solaire' else
+         'OFF' if trigger.id == 'morning' and var_charge_plan == 'Heures creuses' else
+         'ON' if trigger.id == 'evening' and var_charge_plan == 'Solaire' else
+         'OFF' }}
+- wait_template: >-
+    {{ not (is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unknown') or is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unavailable')) }}
+  timeout: "00:02:00"
+  continue_on_timeout: false
+- wait_template: >-
+    {{ as_timestamp(now()) - as_timestamp(states(vehicle_mqtt_topic ~ '/last_data_update')) < 10 }}
+  timeout: "00:02:00"
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/charging_amps"
+    payload: >-
+      {{ '16' if trigger.id == 'evening' else '1' }}
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/charge_limit"
+    payload: >-
+      {{ var_batery_level }}
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/data_update"
+    payload: "PRESS"
+- wait_template: >-
+    {{ not (is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unknown') or is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unavailable')) }}
+  timeout: "00:02:00"
+  continue_on_timeout: false
+- wait_template: >-
+    {{ as_timestamp(now()) - as_timestamp(states(vehicle_mqtt_topic ~ '/last_data_update')) < 10 }}
+  timeout: "00:02:00"
+  continue_on_timeout: false
+- choose:
+  - conditions: '{{ send_notification }}'
+    sequence:
+    - device_id: !input 'notify_device'
+      domain: mobile_app
+      type: notify
+      title: '☀ Solar optimizer - Tesla'
+      message: >-
+        {{ vehicle_mqtt_topic ~ '/last_data_update' }}
+        Charge limit set to {{ var_batery_level }}% for {{ device_attr(vehicle_mqtt_topic ~ '/data_update', "name") }}  (charge plan: {{ var_charge_plan }}).
+- delay:
+    hours: 0
+    minutes: 2
+    seconds: 0
+    milliseconds: 0
+- service: mqtt.publish
+  data:
+    topic: "{{ vehicle_mqtt_topic }}/data_update"
+    payload: "PRESS"
+- wait_template: >-
+    {{ not (is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unknown') or is_state(vehicle_mqtt_topic ~ '/last_data_update', 'unavailable')) }}
+  timeout: "00:02:00"
+  continue_on_timeout: false
+- wait_template: >-
+    {{ as_timestamp(now()) - as_timestamp(states(vehicle_mqtt_topic ~ '/last_data_update')) < 10 }}
+  timeout: "00:02:00"
+  continue_on_timeout: false
+- if:
+  - condition: or
+    conditions:
+      - condition: template
+        value_template: "{{ states(vehicle_mqtt_topic ~ '/charging') == 'on' }}"
+      - condition: template
+        value_template: "{{ states(vehicle_mqtt_topic ~ '/charge_switch') == 'on' }}"
+  then:
+    - service: mqtt.publish
+      data:
+        topic: "{{ vehicle_mqtt_topic }}/charge_switch"
+        payload: "OFF"
